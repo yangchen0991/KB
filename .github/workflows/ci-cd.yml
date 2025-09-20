@@ -1,0 +1,352 @@
+name: 知识库系统 CI/CD 流水线
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+
+jobs:
+  # 代码质量检查
+  code-quality:
+    runs-on: ubuntu-latest
+    name: 代码质量检查
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: 设置 Python 环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: 安装依赖
+      run: |
+        cd backend
+        pip install -r requirements.txt
+        pip install flake8 black isort mypy bandit safety
+    
+    - name: 代码格式检查 (Black)
+      run: |
+        cd backend
+        black --check --diff .
+    
+    - name: 导入排序检查 (isort)
+      run: |
+        cd backend
+        isort --check-only --diff .
+    
+    - name: 代码风格检查 (Flake8)
+      run: |
+        cd backend
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+    
+    - name: 类型检查 (MyPy)
+      run: |
+        cd backend
+        mypy . --ignore-missing-imports
+    
+    - name: 安全检查 (Bandit)
+      run: |
+        cd backend
+        bandit -r . -f json -o bandit-report.json
+    
+    - name: 依赖安全检查 (Safety)
+      run: |
+        cd backend
+        safety check --json --output safety-report.json
+    
+    - name: 上传安全报告
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-reports
+        path: |
+          backend/bandit-report.json
+          backend/safety-report.json
+
+  # 后端测试
+  backend-tests:
+    runs-on: ubuntu-latest
+    name: 后端测试
+    
+    services:
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: 设置 Python 环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: 安装系统依赖
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libmagic1
+    
+    - name: 安装 Python 依赖
+      run: |
+        cd backend
+        pip install -r requirements.txt
+        pip install coverage pytest-django pytest-cov
+    
+    - name: 运行数据库迁移
+      run: |
+        cd backend
+        python manage.py migrate --settings=knowledge_base.settings_test
+    
+    - name: 运行单元测试
+      run: |
+        cd backend
+        coverage run --source='.' manage.py test --settings=knowledge_base.settings_test
+        coverage xml
+    
+    - name: 上传测试覆盖率
+      uses: codecov/codecov-action@v3
+      with:
+        file: backend/coverage.xml
+        flags: backend
+        name: backend-coverage
+    
+    - name: 生成测试报告
+      run: |
+        cd backend
+        coverage report --show-missing > coverage-report.txt
+    
+    - name: 上传测试报告
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-reports
+        path: |
+          backend/coverage.xml
+          backend/coverage-report.txt
+
+  # 前端测试
+  frontend-tests:
+    runs-on: ubuntu-latest
+    name: 前端测试
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: 设置 Node.js 环境
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+    
+    - name: 安装依赖
+      run: |
+        cd frontend
+        npm ci
+    
+    - name: 代码检查 (ESLint)
+      run: |
+        cd frontend
+        npm run lint
+    
+    - name: 类型检查 (TypeScript)
+      run: |
+        cd frontend
+        npm run type-check
+    
+    - name: 运行单元测试
+      run: |
+        cd frontend
+        npm run test:coverage
+    
+    - name: 上传前端覆盖率
+      uses: codecov/codecov-action@v3
+      with:
+        file: frontend/coverage/lcov.info
+        flags: frontend
+        name: frontend-coverage
+
+  # 集成测试
+  integration-tests:
+    runs-on: ubuntu-latest
+    name: 集成测试
+    needs: [backend-tests, frontend-tests]
+    
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+      
+      elasticsearch:
+        image: elasticsearch:8.8.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: false
+        ports:
+          - 9200:9200
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: 设置 Python 环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: 设置 Node.js 环境
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+    
+    - name: 安装后端依赖
+      run: |
+        cd backend
+        pip install -r requirements.txt
+    
+    - name: 安装前端依赖
+      run: |
+        cd frontend
+        npm ci
+    
+    - name: 构建前端
+      run: |
+        cd frontend
+        npm run build
+    
+    - name: 启动后端服务
+      run: |
+        cd backend
+        python manage.py migrate --settings=knowledge_base.settings_test
+        python manage.py runserver --settings=knowledge_base.settings_test &
+        sleep 10
+    
+    - name: 运行集成测试
+      run: |
+        cd backend
+        python manage.py test tests.integration --settings=knowledge_base.settings_test
+
+  # 性能测试
+  performance-tests:
+    runs-on: ubuntu-latest
+    name: 性能测试
+    needs: [integration-tests]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: 设置 Python 环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: 安装依赖
+      run: |
+        cd backend
+        pip install -r requirements.txt
+        pip install locust
+    
+    - name: 运行性能测试
+      run: |
+        cd backend
+        python manage.py migrate --settings=knowledge_base.settings_test
+        python manage.py runserver --settings=knowledge_base.settings_test &
+        sleep 10
+        locust -f tests/performance/locustfile.py --headless -u 10 -r 2 -t 60s --host=http://localhost:8000
+
+  # 安全扫描
+  security-scan:
+    runs-on: ubuntu-latest
+    name: 安全扫描
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: 运行 Trivy 漏洞扫描
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: 上传 Trivy 扫描结果
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  # 构建和部署
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    name: 构建和部署
+    needs: [code-quality, backend-tests, frontend-tests, integration-tests, security-scan]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: 设置 Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: 登录 Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+    
+    - name: 构建后端镜像
+      uses: docker/build-push-action@v5
+      with:
+        context: ./backend
+        push: true
+        tags: |
+          ${{ secrets.DOCKER_USERNAME }}/kb-backend:latest
+          ${{ secrets.DOCKER_USERNAME }}/kb-backend:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: 构建前端镜像
+      uses: docker/build-push-action@v5
+      with:
+        context: ./frontend
+        push: true
+        tags: |
+          ${{ secrets.DOCKER_USERNAME }}/kb-frontend:latest
+          ${{ secrets.DOCKER_USERNAME }}/kb-frontend:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: 部署到生产环境
+      run: |
+        echo "部署到生产环境..."
+        # 这里添加实际的部署脚本
+
+  # 通知
+  notify:
+    runs-on: ubuntu-latest
+    name: 通知
+    needs: [build-and-deploy]
+    if: always()
+    
+    steps:
+    - name: 发送通知
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#ci-cd'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
