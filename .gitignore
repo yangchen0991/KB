@@ -1,0 +1,88 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.pipenv/
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Database
+*.sqlite3
+*.db
+*.sqlite
+
+# Logs
+logs/
+*.log
+
+# Environment files
+.env
+.env.*
+
+# Next.js
+.next/
+out/
+frontend/.next/
+frontend/out/
+
+# Coverage reports
+.coverage
+htmlcov/
+
+# Static files
+staticfiles/
+backend/staticfiles/
+
+# Large binary files
+*.node
+*.pack
+*.dll
+*.exe
+*.so
+*.dylib
+
+# Media files (optional - uncomment if needed)
+# media/
+# *.jpg
+# *.jpeg
+# *.png
+# *.gif
+# *.pdf
+# *.doc
+# *.docx
+
+# Backup files
+*.backup
+*.bak
+
+# Temporary files
+*.tmp
+*.temp
+
+# Cache directories
+.cache/
+.parcel-cache/
+
+# Package lock files (optional)
+# package-lock.json
+# yarn.lock
